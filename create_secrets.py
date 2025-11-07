@@ -5,7 +5,6 @@ def main():
     os.makedirs(os.path.dirname(secrets_path), exist_ok=True)
 
     content = f"""
-[general]
 SUPABASE_URL = "{os.getenv('SUPABASE_URL')}"
 SUPABASE_KEY = "{os.getenv('SUPABASE_KEY')}"
 GOOGLE_MAPS_API_KEY = "{os.getenv('GOOGLE_MAPS_API_KEY')}"
