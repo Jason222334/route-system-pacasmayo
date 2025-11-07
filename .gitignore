@@ -1,0 +1,14 @@
+# Entornos virtuales
+.venv/
+__pycache__/
+
+# Configuración de Streamlit (no subir secrets)
+.streamlit/
+
+# Archivos de entorno locales
+.env
+*.log
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db

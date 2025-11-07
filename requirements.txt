@@ -1,0 +1,12 @@
+streamlit==1.36.0
+pandas==2.2.2
+plotly==5.15.0
+numpy==1.26.4
+matplotlib==3.9.2
+seaborn==0.12.2
+supabase==2.5.1
+fpdf2==2.7.4
+requests==2.31.0
+python-dotenv==1.0.0
+polyline
+
