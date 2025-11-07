@@ -9,6 +9,7 @@ def main():
 SUPABASE_URL = "{os.getenv('SUPABASE_URL')}"
 SUPABASE_KEY = "{os.getenv('SUPABASE_KEY')}"
 GOOGLE_MAPS_API_KEY = "{os.getenv('GOOGLE_MAPS_API_KEY')}"
+N8N_WEBHOOK_URL = "{os.getenv('N8N_WEBHOOK_URL')}"
 """
 
     with open(secrets_path, "w") as f:
