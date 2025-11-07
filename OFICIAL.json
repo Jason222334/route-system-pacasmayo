@@ -1,0 +1,368 @@
+{
+  "name": "OFICIAL",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "optimize-route",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "5da13a2a-6949-4546-b356-a864b9706226",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -48,
+        0
+      ],
+      "webhookId": "4761b1e6-b72f-4515-81aa-406743dc02d8"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Entradas del nodo anterior\nconst deliveries = $json.deliveries || [];\nconst depot = $json.depot || null;\n\nif (!Array.isArray(deliveries) || deliveries.length === 0) {\n  throw new Error(\"No hay entregas para optimizar.\");\n}\n\n// Construye waypoints (solo clientes)\nconst waypoints = deliveries.map(d => ({\n  location: { latLng: { latitude: d.customer_coordinates.lat, longitude: d.customer_coordinates.lng }},\n  label: d.customer_name || \"Entrega\"\n}));\n\n// Define origen y destino\nlet origin, destination;\nif (depot && depot.lat != null && depot.lng != null) {\n  // Almacén como inicio y fin (mismo punto)\n  origin = { location: { latLng: { latitude: depot.lat, longitude: depot.lng } } };\n  destination = { location: { latLng: { latitude: depot.lat, longitude: depot.lng } } };\n} else {\n  // Fallback: primer y último waypoint (comportamiento actual)\n  origin = { ...waypoints[0] };\n  destination = { ...waypoints[waypoints.length - 1] };\n}\n\n// Guarda también etiquetas/nombres para preparar respuesta luego\nreturn [{\n  json: {\n    origin,\n    destination,\n    waypoints: waypoints.map(w => ({ location: w.location })),  // Google espera solo location aquí\n    waypointLabels: waypoints.map(w => w.label),                 // etiquetas paralelas\n    delivery_ids: deliveries.map(d => d.id)\n  }\n}];\n"
+      },
+      "id": "217138da-7e6a-4652-b155-593e002eefd8",
+      "name": "Preparar Coordenadas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        512,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://routes.googleapis.com/directions/v2:computeRoutes",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Goog-Api-Key",
+              "value": "=AIzaSyDwkC3oySWpTQRiKcnpaudSdXyZrqe7GrI"
+            },
+            {
+              "name": "X-Goog-FieldMask",
+              "value": "routes.distanceMeters,routes.duration,routes.legs,routes.polyline.encodedPolyline,routes.optimizedIntermediateWaypointIndex"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"origin\": $json.origin, \"destination\": $json.destination, \"intermediates\": $json.waypoints, \"travelMode\": \"DRIVE\", \"routingPreference\": \"TRAFFIC_UNAWARE\", \"computeAlternativeRoutes\": false, \"optimizeWaypointOrder\": true } }}",
+        "options": {}
+      },
+      "id": "11e29d6b-d5df-4b1a-99f0-5dc1069b862b",
+      "name": "Calcular Ruta Google",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "tableId": "optimized_routes",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "route_name",
+              "fieldValue": "={{ 'Ruta Pacasmayo ' + new Date().toISOString() }}"
+            },
+            {
+              "fieldId": "delivery_ids",
+              "fieldValue": "={{ $('Preparar Coordenadas').item.json.delivery_ids }}"
+            },
+            {
+              "fieldId": "optimized_sequence",
+              "fieldValue": "={{ $json }}"
+            },
+            {
+              "fieldId": "total_distance_km",
+              "fieldValue": "={{ $json.routes[0].distanceMeters / 1000 }}"
+            },
+            {
+              "fieldId": "route_status",
+              "fieldValue": "planned"
+            },
+            {
+              "fieldId": "estimated_duration_minutes",
+              "fieldValue": "={{ Math.round(parseInt($json.routes[0].duration.replace('s',''))/60) }}"
+            }
+          ]
+        }
+      },
+      "id": "600142ec-74f6-49df-9375-a537ac421eb2",
+      "name": "Guardar Ruta en Supabase",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1072,
+        80
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "EXNaxZfrUniM5yZ9",
+          "name": "Supabase account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "00a3b225-cbcc-4cea-8d0a-c61d81adb7b2",
+      "name": "Responder a Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1328,
+        -96
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Respuesta de Google\nconst route = $json.routes && $json.routes[0];\nif (!route) {\n  throw new Error(\"No se recibió una ruta válida desde Google.\");\n}\n\n// Índices del orden óptimo para los intermediates\nconst indices = route.optimizedIntermediateWaypointIndex || [];\n// waypointLabels viene desde “Preparar Coordenadas” (usa $item(0) para acceder a ese nodo)\nconst labels = $item(0).$node[\"Preparar Coordenadas\"].json.waypointLabels || [];\nconst waypoints = $item(0).$node[\"Preparar Coordenadas\"].json.waypoints || [];\n\n// Reconstruye lista ordenada de waypoints (lat/lng + etiqueta)\nconst ordered = indices.map(i => {\n  const loc = waypoints[i].location.latLng;\n  return { lat: loc.latitude, lng: loc.longitude, label: labels[i] || `Punto ${i+1}` };\n});\n\n// Métricas\nconst km = route.distanceMeters / 1000;\nconst mins = Math.round(parseInt((route.duration || \"0s\").replace(\"s\",\"\")) / 60);\n\n// Salida amigable para Streamlit\nreturn [{\n  json: {\n    success: true,\n    message: \"Ruta optimizada correctamente\",\n    total_distance_km: km,\n    estimated_duration_minutes: mins,\n    optimized_sequence: {\n      encodedPolyline: route.polyline.encodedPolyline,\n      ordered_waypoints: ordered\n    }\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1072,
+        -96
+      ],
+      "id": "f5dee9f1-e866-41e5-a615-b4f63a0dabbd",
+      "name": "Preparar Respuesta"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 🚚 Consultar entregas seleccionadas desde Streamlit\n\nconst body = $json.body || $json;\nconst ids = body.deliveries || [];\n\nif (!Array.isArray(ids) || ids.length === 0) {\n  throw new Error(\"No se recibieron entregas válidas desde Streamlit.\");\n}\n\n// --- Configuración de Supabase ---\nconst apiKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1ib3Z2eWNncW9hdGJpcXpzZGtuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjE1NzEwMzQsImV4cCI6MjA3NzE0NzAzNH0.3NH86uS-U_aNH9iilNHYvIdXA1iaWR7q-cdQ31VpfbA';\nconst url = 'https://mbovvycgqoatbiqzsdkn.supabase.co/rest/v1/deliveries';\n\n// --- Construir filtro SQL “IN” ---\nconst idFilter = `id=in.(${ids.map(id => `\"${id}\"`).join(',')})`;\n\n// --- Solicitud HTTP ---\nconst response = await this.helpers.httpRequest({\n  method: 'GET',\n  url: `${url}?${idFilter}&select=*`,\n  headers: {\n    apikey: apiKey,\n    Authorization: `Bearer ${apiKey}`,\n  },\n});\n\n// --- Devolver entregas ---\nreturn [{\n  json: {\n    deliveries: response,           // ya lo tienes\n    depot: ($json.body || $json).depot || null  // pasa el depot hacia abajo\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ],
+      "id": "e4e73a84-45ee-41d9-b87f-b99bb061d32e",
+      "name": "Consultar entregas seleccionadas"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1ijs1ePVYKFL3LqbL1NnN4t-dYJSTOPCFUUhGcE0MOUU",
+          "mode": "list",
+          "cachedResultName": "Rutas",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1ijs1ePVYKFL3LqbL1NnN4t-dYJSTOPCFUUhGcE0MOUU/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Hoja 1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1ijs1ePVYKFL3LqbL1NnN4t-dYJSTOPCFUUhGcE0MOUU/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Nombre_Ruta": "={{ $json.route_name }}",
+            "Estado": "={{ $json.route_status }}",
+            "Fecha": "={{ $json.created_at }}",
+            "Duracion_m": "={{ $json.estimated_duration_minutes }}",
+            "Distancia_km": "={{ $json.total_distance_km }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Fecha",
+              "displayName": "Fecha",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Nombre_Ruta",
+              "displayName": "Nombre_Ruta",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Distancia_km",
+              "displayName": "Distancia_km",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Duracion_m",
+              "displayName": "Duracion_m",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Estado",
+              "displayName": "Estado",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1328,
+        80
+      ],
+      "id": "a5fde269-2a65-4536-8241-819506597bb4",
+      "name": "Google Sheets",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "tSjmzszW78LwihYD",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "jgalvezlu@unitru.edu.pe",
+        "toEmail": "jgalvezlu@unitru.edu.pe",
+        "subject": "Ruta optimizada en Pacasmayo",
+        "emailFormat": "text",
+        "text": "=Se ha generado una nueva ruta optimizada para tus entregas.\nID de ruta: {{ $json.id }}\nDistancia total: {{ $json.total_distance_km }} km\nDuración estimada: {{ $json.estimated_duration_minutes }} minutos.",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1328,
+        288
+      ],
+      "id": "1660b4b2-6d8e-4f36-af5a-968d5e8ef459",
+      "name": "Email (SMTP)",
+      "webhookId": "0e4c6124-9152-43e6-9c39-b3a87806b94f",
+      "credentials": {
+        "smtp": {
+          "id": "CbImC7u3aW4FLNNA",
+          "name": "SMTP account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Consultar entregas seleccionadas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Coordenadas": {
+      "main": [
+        [
+          {
+            "node": "Calcular Ruta Google",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calcular Ruta Google": {
+      "main": [
+        [
+          {
+            "node": "Guardar Ruta en Supabase",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Preparar Respuesta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar Ruta en Supabase": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Email (SMTP)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Respuesta": {
+      "main": [
+        [
+          {
+            "node": "Responder a Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultar entregas seleccionadas": {
+      "main": [
+        [
+          {
+            "node": "Preparar Coordenadas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "477385f6-13b4-492f-a4b8-a67571b123d9",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "fdc50381a06190c49f2fd53338f2e2196c83ec5d1b54ae29fd5879d8bd6bf7e1"
+  },
+  "id": "AeQRCQ5JFl9QHOb5",
+  "tags": []
+}
